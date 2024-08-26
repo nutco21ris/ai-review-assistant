@@ -67,15 +67,13 @@ def main():
                 total_rows = len(df)
                 st.write(f"Total number of reviews: {total_rows}")
 
-                # 动态批次大小
-                max_batch_size = min(1000, total_rows)  # 设置最大批次大小为1000或数据集大小
+                max_batch_size = min(1000, total_rows)
                 batch_size = st.slider("Select batch size for processing:", 
                                        min_value=10, 
                                        max_value=max_batch_size, 
                                        value=min(100, max_batch_size), 
                                        step=10)
 
-                # 采样选项
                 use_sampling = st.checkbox("Use random sampling")
                 if use_sampling:
                     sample_size = st.number_input("Enter sample size:", 
@@ -83,16 +81,14 @@ def main():
                                                   max_value=total_rows, 
                                                   value=min(1000, total_rows))
 
-                # 分页处理
                 if not use_sampling:
-                    page_size = batch_size * 10  # 每页包含10个批次
+                    page_size = batch_size * 10 
                     total_pages = (total_rows - 1) // page_size + 1
                     page_number = st.number_input("Select page to process:", 
                                                   min_value=1, 
                                                   max_value=total_pages, 
                                                   value=1)
 
-                # 选择列
                 selected_columns = st.multiselect("Choose columns to include in the analysis:", 
                                                   df.columns.tolist(), 
                                                   default=df.columns.tolist())
