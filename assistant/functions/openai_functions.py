@@ -1,9 +1,8 @@
-import openai
-import pandas as pd
-import json
+from openai import OpenAI
 from assistant.config import OPENAI_API_KEY
+import json
 
-client = openai.OpenAI(api_key=OPENAI_API_KEY)
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 def chat_completion_with_function(messages, functions=None):
     response = client.chat.completions.create(
@@ -31,14 +30,14 @@ def generate_review(prompt):
             }
         }
     ]
-    
+
     messages = [
         {"role": "system", "content": "You are an AI assistant that generates reviews."},
         {"role": "user", "content": prompt}
     ]
-    
+
     response = chat_completion_with_function(messages, functions)
-    
+
     if response.function_call:
         review = json.loads(response.function_call.arguments)["review"]
         return review
@@ -67,14 +66,14 @@ def analyze_review(review):
             }
         }
     ]
-    
+
     messages = [
         {"role": "system", "content": "You are an AI assistant that analyzes reviews."},
         {"role": "user", "content": f"Analyze this review: {review}"}
     ]
-    
+
     response = chat_completion_with_function(messages, functions)
-    
+
     if response.function_call:
         analysis = json.loads(response.function_call.arguments)
         return analysis
@@ -98,14 +97,14 @@ def generate_response(review, analysis):
             }
         }
     ]
-    
+
     messages = [
         {"role": "system", "content": "You are an AI assistant that generates responses to reviews."},
         {"role": "user", "content": f"Generate a response to this review: {review}\nAnalysis: {analysis}"}
     ]
-    
+
     response = chat_completion_with_function(messages, functions)
-    
+
     if response.function_call:
         generated_response = json.loads(response.function_call.arguments)["response"]
         return generated_response
@@ -119,7 +118,6 @@ def gpt_analyze_csv(df, batch_size=20, progress_callback=None):
     all_analyses = []
 
     for i, batch in enumerate(batches):
-        # Create a concise summary of the batch instead of full JSON
         batch_summary = batch.agg({
             col: lambda x: x.value_counts().head(3).to_dict() if x.dtype == 'object' else x.mean()
             for col in batch.columns
@@ -145,7 +143,6 @@ def gpt_analyze_csv(df, batch_size=20, progress_callback=None):
 
         if progress_callback:
             progress_callback((i + 1) / len(batches))
-
 
     combined_analysis = "\n\n".join(all_analyses)
 
