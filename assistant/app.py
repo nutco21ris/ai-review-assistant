@@ -1,13 +1,8 @@
 import streamlit as st
-import pandas as pd
-import numpy as np
-from assistant.functions.openai_functions import (
-    generate_review,
-    analyze_review,
-    generate_response,
-    gpt_analyze_csv
-)
-from assistant.config import MAX_REVIEWS_TO_PROCESS
+from assistant.functions.openai_functions import analyze_reviews_batch
+from assistant.functions.review_analyzer import analyze_review  # Import single review analyzer
+from assistant.functions.data_processor import load_data, get_column_names
+import time
 
 def main():
     st.set_page_config(page_title="AI Review Assistant", layout="wide")
@@ -17,107 +12,68 @@ def main():
 
     with tab1:
         st.header("Single Review Analysis")
-        review_source = st.radio("Review Source:", ["Input Review", "Generate Review"])
-
-        review = None
-
-        if review_source == "Input Review":
-            review = st.text_area("Enter a review:", height=150)
-            if st.button("Analyze Review"):
-                if review:
-                    with st.spinner('Analyzing review...'):
-                        analysis = analyze_review(review)
-                        response = generate_response(review, analysis)
-                    
-                    st.subheader("Analysis Results:")
-                    st.write(f"Sentiment Score: {analysis['sentiment_score']:.2f}")
-                    st.write(f"Quality: {analysis['quality']}")
-                    st.write("Generated Response:")
-                    st.write(response)
-                else:
-                    st.warning("Please enter a review first.")
-        else:
-            prompt = st.text_input("Enter a prompt to generate a review:", "Generate a review about a restaurant")
-            if st.button("Generate Review"):
-                with st.spinner('Generating review...'):
-                    review = generate_review(prompt)
-                    st.write("Generated Review:", review)
-                    
+        review = st.text_area("Enter a review:", height=150)
+        if st.button("Analyze Single Review"):
+            if review:
+                with st.spinner('Analyzing review...'):
+                    # Call the analyze_review function to get the plain text analysis
                     analysis = analyze_review(review)
-                    response = generate_response(review, analysis)
-                
                 st.subheader("Analysis Results:")
-                st.write(f"Sentiment Score: {analysis['sentiment_score']:.2f}")
-                st.write(f"Quality: {analysis['quality']}")
-                st.write("Generated Response:")
-                st.write(response)
+                
+                # Display the plain text analysis as a paragraph (no scroll bar)
+                st.write(analysis)  # This renders the analysis as a paragraph instead of a scrollable area.
+            else:
+                st.warning("Please enter a review first.")
 
     with tab2:
         st.header("Batch Review Processing")
-        
         uploaded_file = st.file_uploader("Upload your review dataset (CSV or Excel)", type=["csv", "xlsx"])
         
         if uploaded_file is not None:
             try:
-                df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
+                df = load_data(uploaded_file)
                 
                 st.write("Dataset Preview:")
                 st.write(df.head())
 
-                total_rows = len(df)
-                st.write(f"Total number of reviews: {total_rows}")
+                columns = get_column_names(df)
+                review_column = st.selectbox("Select the column containing the reviews:", columns)
 
-                max_batch_size = min(1000, total_rows)
-                batch_size = st.slider("Select batch size for processing:", 
-                                       min_value=10, 
-                                       max_value=max_batch_size, 
-                                       value=min(100, max_batch_size), 
-                                       step=10)
-
-                use_sampling = st.checkbox("Use random sampling")
-                if use_sampling:
-                    sample_size = st.number_input("Enter sample size:", 
-                                                  min_value=100, 
-                                                  max_value=total_rows, 
-                                                  value=min(1000, total_rows))
-
-                if not use_sampling:
-                    page_size = batch_size * 10 
-                    total_pages = (total_rows - 1) // page_size + 1
-                    page_number = st.number_input("Select page to process:", 
-                                                  min_value=1, 
-                                                  max_value=total_pages, 
-                                                  value=1)
-
-                selected_columns = st.multiselect("Choose columns to include in the analysis:", 
-                                                  df.columns.tolist(), 
-                                                  default=df.columns.tolist())
+                batch_size = st.slider("Select batch size for processing:", min_value=10, max_value=500, value=100, step=10)
 
                 if st.button("Analyze Reviews"):
-                    with st.spinner('Analyzing reviews... This may take a while.'):
-                        if use_sampling:
-                            df_selected = df[selected_columns].sample(n=sample_size)
-                        else:
-                            start_idx = (page_number - 1) * page_size
-                            end_idx = start_idx + page_size
-                            df_selected = df[selected_columns].iloc[start_idx:end_idx]
-
-                        progress_bar = st.progress(0)
-                        status_text = st.empty()
-
-                        def update_progress(progress):
-                            progress_bar.progress(progress)
-                            status_text.text(f"Processed {progress:.0%}")
-
-                        analysis_result = gpt_analyze_csv(df_selected, batch_size=batch_size, progress_callback=update_progress)
+                    reviews = df[review_column].astype(str).tolist()
+                    total_reviews = len(reviews)
                     
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    analysis_text = st.empty()
+
+                    analysis = ""
+                    start_time = time.time()
+                    for i in range(0, total_reviews, batch_size):
+                        batch = reviews[i:i+batch_size]
+                        batch_analysis = analyze_reviews_batch(batch, batch_size=batch_size)
+                        analysis += batch_analysis + "\n\n"
+                        
+                        progress = min((i + batch_size) / total_reviews, 1.0)
+                        progress_bar.progress(progress)
+                        processed = min(i + batch_size, total_reviews)
+                        elapsed_time = time.time() - start_time
+                        avg_time_per_review = elapsed_time / processed if processed > 0 else 0
+                        eta = (total_reviews - processed) * avg_time_per_review
+                        status_text.text(f"Processed {processed} out of {total_reviews} reviews. ETA: {eta:.2f} seconds")
+                        
+                        # Display only the latest analysis result
+                        analysis_text.text_area("Current Analysis:", batch_analysis, height=300)
+
                     st.success("Analysis complete!")
-                    st.subheader("Analysis Results:")
-                    st.write(analysis_result)
+                    st.subheader("Overall Analysis")
+                    st.text_area("Final Analysis:", analysis, height=500)
 
             except Exception as e:
                 st.error(f"An error occurred: {str(e)}")
-                st.write("Please make sure your file is in the correct format.")
+                st.write("Please make sure your file is in the correct format and you've selected the correct review column.")
 
 if __name__ == "__main__":
     main()

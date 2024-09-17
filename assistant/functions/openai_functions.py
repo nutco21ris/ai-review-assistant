@@ -1,160 +1,54 @@
-from openai import OpenAI
+import openai
 from assistant.config import OPENAI_API_KEY
-import json
+import time
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+openai.api_key = OPENAI_API_KEY
 
-def chat_completion_with_function(messages, functions=None):
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=messages,
-        functions=functions,
-        function_call="auto" if functions else None
-    )
-    return response.choices[0].message
-
-def generate_review(prompt):
-    functions = [
-        {
-            "name": "create_review",
-            "description": "Generate a review based on the given prompt",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "review": {
-                        "type": "string",
-                        "description": "The generated review"
-                    }
-                },
-                "required": ["review"]
-            }
-        }
-    ]
-
-    messages = [
-        {"role": "system", "content": "You are an AI assistant that generates reviews."},
-        {"role": "user", "content": prompt}
-    ]
-
-    response = chat_completion_with_function(messages, functions)
-
-    if response.function_call:
-        review = json.loads(response.function_call.arguments)["review"]
-        return review
-    else:
-        return response.content
-
-def analyze_review(review):
-    functions = [
-        {
-            "name": "analyze_review",
-            "description": "Analyze the sentiment and quality of a review",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "sentiment_score": {
-                        "type": "number",
-                        "description": "Sentiment score from 0 (very negative) to 1 (very positive)"
-                    },
-                    "quality": {
-                        "type": "string",
-                        "enum": ["Low", "Medium", "High"],
-                        "description": "The quality of the review"
-                    }
-                },
-                "required": ["sentiment_score", "quality"]
-            }
-        }
-    ]
-
-    messages = [
-        {"role": "system", "content": "You are an AI assistant that analyzes reviews."},
-        {"role": "user", "content": f"Analyze this review: {review}"}
-    ]
-
-    response = chat_completion_with_function(messages, functions)
-
-    if response.function_call:
-        analysis = json.loads(response.function_call.arguments)
-        return analysis
-    else:
-        return {"sentiment_score": 0.5, "quality": "Medium"}
-
-def generate_response(review, analysis):
-    functions = [
-        {
-            "name": "generate_response",
-            "description": "Generate a response to a review based on its content and analysis",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "response": {
-                        "type": "string",
-                        "description": "The generated response to the review"
-                    }
-                },
-                "required": ["response"]
-            }
-        }
-    ]
-
-    messages = [
-        {"role": "system", "content": "You are an AI assistant that generates responses to reviews."},
-        {"role": "user", "content": f"Generate a response to this review: {review}\nAnalysis: {analysis}"}
-    ]
-
-    response = chat_completion_with_function(messages, functions)
-
-    if response.function_call:
-        generated_response = json.loads(response.function_call.arguments)["response"]
-        return generated_response
-    else:
-        return response.content
-
-def gpt_analyze_csv(df, batch_size=20, progress_callback=None):
-    total_rows = len(df)
-    batches = [df[i:i+batch_size] for i in range(0, total_rows, batch_size)]
-
+def analyze_reviews_batch(reviews, batch_size=100, max_retries=3, delay=20):
     all_analyses = []
 
-    for i, batch in enumerate(batches):
-        batch_summary = batch.agg({
-            col: lambda x: x.value_counts().head(3).to_dict() if x.dtype == 'object' else x.mean()
-            for col in batch.columns
-        }).to_dict()
+    for i in range(0, len(reviews), batch_size):
+        batch = reviews[i:i + batch_size]
+        batch_text = "\n\n".join(batch)
 
-        messages = [
-            {"role": "system", "content": "You are an AI assistant that analyzes CSV data containing reviews. Provide a summary of the data and analyze the reviews."},
-            {"role": "user", "content": f"Here's a summary of batch {i+1} of {len(batches)} of review data: {batch_summary}\n\n"
-                                       f"Please provide a brief summary of this batch, including:\n"
-                                       f"1. Number of reviews in this batch\n"
-                                       f"2. Most common values for categorical columns\n"
-                                       f"3. Average values for numerical columns\n"
-                                       f"Keep your analysis concise as it will be combined with analyses of other batches."}
-        ]
+        for attempt in range(max_retries):
+            try:
+                # Make the OpenAI API call for sentiment analysis of each batch
+                response = openai.ChatCompletion.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "You are a sentiment analysis assistant."},
+                        {"role": "user", "content": f"Analyze these reviews for sentiment and quality:\n{batch_text}"}
+                    ],
+                    temperature=0.7,
+                    max_tokens=500
+                )
+                analysis = response.choices[0].message['content']
+                all_analyses.append(analysis)
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(delay)
+                else:
+                    return f"Error analyzing reviews: {str(e)}"
 
-        response = client.chat.completions.create(
+        time.sleep(delay)  # Wait between batches to avoid rate limits
+
+    # Combine all batch analyses
+    return "\n\n".join(all_analyses)
+
+
+def generate_review(prompt: str) -> str:
+    try:
+        response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
-            messages=messages,
-            max_tokens=500
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that generates customer reviews."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=200
         )
-
-        all_analyses.append(response.choices[0].message.content)
-
-        if progress_callback:
-            progress_callback((i + 1) / len(batches))
-
-    combined_analysis = "\n\n".join(all_analyses)
-
-    final_summary_prompt = f"Based on the following batch analyses of a review dataset, provide an overall summary:\n\n{combined_analysis}\n\nPlease include:\n1. Total number of reviews analyzed\n2. Most common values across all batches\n3. Any other interesting insights you can draw from the data"
-
-    final_summary_response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": "You are an AI assistant that provides final summaries of review data analyses."},
-            {"role": "user", "content": final_summary_prompt}
-        ],
-        max_tokens=1000
-    )
-
-    return final_summary_response.choices[0].message.content
+        return response.choices[0].message['content'].strip()
+    except Exception as e:
+        print(f"Error generating review: {e}")
+        return "Unable to generate review at this time."
